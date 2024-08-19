@@ -11,11 +11,17 @@
 // Variável para armazenar o IP anterior
 String previousIP = "";
 
+// Variáveis para controle de tempo
+unsigned long lastCheckTime = 0;
+unsigned long lastEmailTime = 0;
+const unsigned long checkInterval = 60000;  // Intervalo de verificação do IP (1 minuto)
+const unsigned long emailInterval = 1000;   // Intervalo para enviar e-mail (ajustar conforme necessário)
+bool hasRestartedToday = false;
+
 // Configuração de NTP
 WiFiUDP ntpUDP;
 int utcOffsetInSeconds = -3 * 3600;
 NTPClient timeClient(ntpUDP, "pool.ntp.org", utcOffsetInSeconds, 60000);  // Sincroniza a cada minuto
-
 
 // Endereço da EEPROM
 const int EEPROM_SIZE = 512;
@@ -45,7 +51,6 @@ String loadPreviousIP() {
   return ip;
 }
 
-
 // Função para salvar o estado do reinício na EEPROM
 void saveRestartFlag(bool hasRestarted) {
   EEPROM.begin(EEPROM_SIZE);
@@ -58,7 +63,6 @@ bool loadRestartFlag() {
   EEPROM.begin(EEPROM_SIZE);
   return EEPROM.read(RESTART_FLAG_ADDRESS) == 1;
 }
-
 
 // Função para enviar e-mail
 void sendEmail(String subject, String body) {
@@ -76,7 +80,7 @@ void sendEmail(String subject, String body) {
   client.println(base64::encode(smtp_user));  // Enviar usuário em base64
   client.println(base64::encode(smtp_pass));  // Enviar senha em base64
   client.println("MAIL FROM: <" + String(smtp_user) + ">");
-  client.println("RCPT TO: <" + String(smtp_user) + ">"); // Estou enviando para mim mesmo
+  client.println("RCPT TO: <" + String(smtp_user) + ">");  // Estou enviando para mim mesmo
   client.println("DATA");
   client.println("Subject: " + subject);
   client.println("Content-Type: text/plain");
@@ -110,17 +114,28 @@ String getPublicIP() {
   return payload;
 }
 
-// Variáveis para controle de tempo
-unsigned long lastCheckTime = 0;
-unsigned long lastEmailTime = 0;
-const unsigned long checkInterval = 60000;  // Intervalo de verificação do IP (1 minuto)
-const unsigned long emailInterval = 1000;   // Intervalo para enviar e-mail (ajustar conforme necessário)
+// Função para conectar ao Wi-Fi
+void connectToWiFi() {
+  WiFi.begin(ssid, password);
+  Serial.println("Tentando conectar ao Wi-Fi...");
 
-bool hasRestartedToday = false;
+  int attempts = 0;
+  while (WiFi.status() != WL_CONNECTED && attempts < 20) {  // Tenta conectar por 20 tentativas
+    delay(500);
+    Serial.print(".");
+    attempts++;
+  }
+
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("\nConectado ao Wi-Fi!");
+  } else {
+    Serial.println("\nFalha ao conectar ao Wi-Fi. Tentando novamente...");
+  }
+}
 
 void setup() {
   Serial.begin(115200);
-  WiFi.begin(ssid, password);
+  connectToWiFi();  // Conectar ao Wi-Fi
 
   // Conectar ao Wi-Fi
   while (WiFi.status() != WL_CONNECTED) {
@@ -142,43 +157,48 @@ void setup() {
 
 void loop() {
   unsigned long currentMillis = millis();
-
   timeClient.update();
   int currentHour = timeClient.getHours();
   int currentMinute = timeClient.getMinutes();
 
-  // Verificar se é 4h30 da manhã para reiniciar o dispositivo
-  if (currentHour == 4 && currentMinute == 30 && !hasRestartedToday) {
-    Serial.println("Reiniciando o dispositivo...");
-    sendEmail("Reinicio Programado", "ESP8266 sera reiniciado");
-    hasRestartedToday = true;  // Marca que o reinício já foi feito hoje
-    saveRestartFlag(true);     // Marca que o reinício foi feito hoje
-    ESP.restart();
-  }
+  // Verificar a conexão Wi-Fi
+  if (WiFi.status() != WL_CONNECTED) {
+    connectToWiFi();  // Tentar reconectar se a conexão for perdida
+  } else { // explicitamente sera executado somente se estiver conectado a rede.
 
-  // Se já passou o horário de reinício, permitir reinício novamente no próximo dia
-  if (currentHour != 4 || currentMinute != 30 && hasRestartedToday) {
-    hasRestartedToday = false;
-    saveRestartFlag(false);  // Marca que o reinício foi feito hoje
-  }
+    // Verificar se é 4h30 da manhã para reiniciar o dispositivo
+    if (currentHour == 4 && currentMinute == 30 && !hasRestartedToday) {
+      Serial.println("Reiniciando o dispositivo...");
+      sendEmail("Reinicio Programado", "ESP8266 sera reiniciado");
+      hasRestartedToday = true;  // Marca que o reinício já foi feito hoje
+      saveRestartFlag(true);     // Marca que o reinício foi feito hoje
+      ESP.restart();
+    }
 
-  // ---
+    // Se já passou o horário de reinício, permitir reinício novamente no próximo dia
+    if (currentHour != 4 || currentMinute != 30 && hasRestartedToday) {
+      hasRestartedToday = false;
+      saveRestartFlag(false);  // Marca que o reinício foi feito hoje
+    }
 
-  // Verificar o IP a cada intervalo
-  if (currentMillis - lastCheckTime >= checkInterval) {
-    lastCheckTime = currentMillis;
+    // ---
 
-    String currentIP = getPublicIP();
+    // Verificar o IP a cada intervalo
+    if (currentMillis - lastCheckTime >= checkInterval) {
+      lastCheckTime = currentMillis;
 
-    // Verificar se o IP mudou
-    if (currentIP != previousIP && currentIP != "") {
-      Serial.println("IP mudou para: " + currentIP);
-      if (currentMillis - lastEmailTime >= emailInterval) {
-        sendEmail("IP Alterado", "Novo IP: " + currentIP);
-        lastEmailTime = currentMillis;
+      String currentIP = getPublicIP();
+
+      // Verificar se o IP mudou
+      if (currentIP != previousIP && currentIP != "") {
+        Serial.println("IP mudou para: " + currentIP);
+        if (currentMillis - lastEmailTime >= emailInterval) {
+          sendEmail("IP Alterado", "Novo IP: " + currentIP);
+          lastEmailTime = currentMillis;
+        }
+        previousIP = currentIP;
+        savePreviousIP(currentIP);  // Salvar novo IP na EEPROM
       }
-      previousIP = currentIP;
-      savePreviousIP(currentIP);  // Salvar novo IP na EEPROM
     }
   }
 }
