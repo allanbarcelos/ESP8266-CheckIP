@@ -1,0 +1,14 @@
+#ifndef CONFIG_H
+#define CONFIG_H
+
+// Configurações Wi-Fi
+const char* ssid = "YOUR SSID";
+const char* password = "YOUR PASSWORD";
+
+// Configurações de e-mail
+const char* smtp_server = "smtp.gmail.com";
+const int smtp_port = 465;
+const char* smtp_user = "YOUR USER";
+const char* smtp_pass = "YOUR PASSWORD";
+
+#endif // CONFIG_H
